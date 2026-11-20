@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PeachMitao 外置播放器助手 (VLC / PotPlayer / IINA / MPV)
 // @namespace    https://github.com/kylo1989/peachmitao-external-player
-// @version      1.3.0
-// @description  自动嗅探 PeachMitao 网页端视频流直链，穿透顶层弹窗一键唤起本地 VLC、PotPlayer、IINA、MPV 播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
+// @version      1.4.0
+// @description  精准嗅探 PeachMitao 原始视频流直链 (ticket=)，屏蔽 HLS 切片干扰，穿透顶层弹窗一键唤起本地 VLC、PotPlayer、IINA、MPV 播放。
 // @author       kylo1989
 // @match        http://*/*
 // @match        https://*/*
@@ -72,29 +72,52 @@
     }
 
     let capturedStreamUrl = '';
+    let hasTicketStream = false;
     let isActivated = isPeachSite();
     let uiInjected = false;
 
+    // 过滤掉 HLS 临时切片 (.ts / .m4s)，只保留完整直链或主播放列表
     function isValidStreamUrl(url) {
         if (!url || typeof url !== 'string') return false;
         if (url.startsWith('blob:') || url.startsWith('data:')) return false;
+
+        // 严格排除网页转码产生的单个切片文件，防止覆盖原始直链
+        if (/\/hls\/.*\.(ts|m4s)(\?|$)/i.test(url) || /\.(ts|m4s)(\?|$)/i.test(url)) {
+            return false;
+        }
+
+        // PeachMitao 原始直链最高特征
         if (url.includes('ticket=')) return true;
-        if (/\.(m3u8|mp4|mkv|avi|ts|flv|mov|webm)(\?|$)/i.test(url)) return true;
+
+        // 兜底匹配完整视频文件或 m3u8 主索引
+        if (/\.(mp4|mkv|avi|flv|mov|webm|m3u8)(\?|$)/i.test(url)) return true;
+
         return false;
     }
 
     function handleCapturedUrl(rawUrl) {
         if (!isValidStreamUrl(rawUrl)) return;
 
-        if (rawUrl.includes('ticket=')) {
+        const isTicket = rawUrl.includes('ticket=');
+        if (isTicket) {
             isActivated = true;
         }
         if (!isActivated) return;
 
+        // 如果已经捕获到带 ticket= 的原始直链，则不再被普通 m3u8 覆盖（除非来了新的 ticket= 链接）
+        if (hasTicketStream && !isTicket) {
+            return;
+        }
+
         try {
             const fullUrl = new URL(rawUrl, location.origin).href;
             if (fullUrl === capturedStreamUrl) return;
+
             capturedStreamUrl = fullUrl;
+            if (isTicket) {
+                hasTicketStream = true;
+            }
+
             ensureUI();
             syncMountTarget();
             updateUIState();
@@ -150,7 +173,6 @@
             target.appendChild(bar);
         }
 
-        // 利用 Popover API 置顶于浏览器的 Top Layer 渲染栈
         if (typeof bar.showPopover === 'function') {
             try {
                 if (bar.matches(':popover-open')) {
@@ -262,16 +284,14 @@
             btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
         });
 
-        // 自动唤起 VLC（同时复制直链到剪贴板兜底）
         document.getElementById('peach-btn-vlc').onclick = (e) => {
             e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             GM_setClipboard(capturedStreamUrl);
             location.href = 'vlc://' + capturedStreamUrl;
-            showToast('正在唤起 VLC（直链已同步复制，未安装协议可直接 Ctrl+V）');
+            showToast('正在唤起 VLC（直链已同步复制，未注册协议可直接 Ctrl+V）');
         };
 
-        // 自动唤起 PotPlayer
         document.getElementById('peach-btn-pot').onclick = (e) => {
             e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
@@ -279,7 +299,6 @@
             showToast('正在唤起 PotPlayer...');
         };
 
-        // 自动唤起 IINA (macOS)
         document.getElementById('peach-btn-iina').onclick = (e) => {
             e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
@@ -287,7 +306,6 @@
             showToast('正在唤起 IINA...');
         };
 
-        // 自动唤起 MPV
         document.getElementById('peach-btn-mpv').onclick = (e) => {
             e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
@@ -295,15 +313,13 @@
             showToast('正在唤起 MPV...');
         };
 
-        // 仅复制直链
         document.getElementById('peach-btn-copy').onclick = (e) => {
             e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             GM_setClipboard(capturedStreamUrl);
-            showToast('视频直链已复制到剪贴板');
+            showToast('视频原始直链已复制到剪贴板');
         };
 
-        // 折叠/展开控制
         let collapsed = false;
         const toggleBtn = document.getElementById('peach-btn-toggle');
         toggleBtn.onclick = (e) => {
@@ -323,7 +339,7 @@
         const statusEl = document.getElementById('peach-ext-status');
         if (statusEl && capturedStreamUrl) {
             statusEl.style.setProperty('color', '#4ade80', 'important');
-            statusEl.textContent = '● 已捕获';
+            statusEl.textContent = hasTicketStream ? '● 原盘直链' : '● 已捕获';
         }
     }
 
