@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Tampermonkey](https://img.shields.io/badge/Userscript-Tampermonkey-green.svg)](https://www.tampermonkey.net/)
 
-一款专为自建 **PeachMitao** 影视项目打造的油猴（Tampermonkey）增强脚本。它能够自动嗅探网页播放器的真实视频流直链，一键唤起本地独立播放器（**PotPlayer**、**IINA**、**MPV**）或一键复制直链至 **VLC** 播放。
+一款专为自建 **PeachMitao** 影视项目打造的油猴（Tampermonkey）增强脚本。它能够自动嗅探网页播放器的真实视频流直链，一键自动唤起本地独立播放器（**VLC**、**PotPlayer**、**IINA**、**MPV**）播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
 
 ---
 
@@ -15,7 +15,15 @@
 &nbsp;
 [![点击一键安装 (国内加速)](https://img.shields.io/badge/⚡_点击一键安装-国内_CDN_加速-007ec6?style=for-the-badge)](https://cdn.jsdelivr.net/gh/kylo1989/peachmitao-external-player@main/peachmitao-external-player.user.js)
 
-> **提示**：如遇默认分支名称为 `master` 而非 `main`，在创建仓库时选择 `main` 分支，或将上方链接中的 `main` 替换为 `master` 即可。
+---
+
+## 🖥️ Windows 一键唤起 VLC 配置（必看）
+
+Windows 下 PotPlayer 安装时会自动注册 `potplayer://` 协议，但 **VLC 官方安装包默认不会注册 `vlc://` 协议**。
+
+如需实现点击网页 `VLC` 按钮**自动弹出 VLC 播放器**，只需下载本仓库中的 [`register-vlc-protocol.bat`](./register-vlc-protocol.bat)，**右键选择“以管理员身份运行”** 即可自动完成协议注册（脚本会自动定位 `C:\Program Files\VideoLAN\VLC\vlc.exe`，绿色版手动输入路径即可）。
+
+> **免配置兜底**：即使不注册 `vlc://` 协议，每次点击网页上的 `VLC` 按钮时，脚本也会同步将直链复制到剪贴板，切到 VLC 窗口按下 `Ctrl + V` 回车同样可以秒播。
 
 ---
 
@@ -34,32 +42,19 @@
 - **零配置通用适配**：无需手动修改代码中的 IP 或端口，自动兼容任意内网 IP、自定义端口及反向代理域名。
 - **智能站点识别 + 菜单手动开关**：自动识别 PeachMitao 页面与 `ticket=` 流媒体特征，不干扰其他正常网页；支持通过油猴扩展菜单一键为任意自定义域名强制开启或禁用。
 - **全链路视频流嗅探**：同时拦截 `fetch`、`XMLHttpRequest` 以及动态生成的 `<video>` 标签，秒级捕获真实播放流。
-- **多平台播放器支持**：
-  - **Windows**：一键唤起 **PotPlayer** / **MPV**，或一键复制直链至 **VLC**。
-  - **macOS**：一键唤起 **IINA**。
-- **无感轻量化悬浮栏**：毛玻璃紧凑设计，支持右上角一键收起，复制直链采用非阻塞式气泡提示。
+- **全平台主流播放器支持**：
+  - **VLC**：一键自动唤起（需运行一次 `register-vlc-protocol.bat`）+ 自动复制直链双保险。
+  - **PotPlayer**：一键自动唤起（Windows 原生支持）。
+  - **IINA**：一键自动唤起（macOS 原生支持）。
+  - **MPV**：一键自动唤起（需注册 `mpv://` 协议）。
 
 ---
 
 ## 🎮 使用说明
 
 1. 打开你部署的 PeachMitao 网页并进入任意影片的播放页面。
-2. 当视频开始加载时，脚本会自动捕获视频直链，并在页面右上角浮现悬浮控制栏：
-   - **PotPlayer**：直接调用本地安装的 PotPlayer 播放（Windows 推荐）。
-   - **IINA**：直接调用本地安装的 IINA 播放（macOS 推荐）。
-   - **MPV**：通过 `mpv://` 协议调用本地 MPV（需提前配置协议关联）。
-   - **复制直链(VLC)**：将完整视频直链复制到剪贴板，切换到 VLC 窗口按下 `Ctrl + V`（macOS 为 `Cmd + V`）回车即可播放。
+2. 当视频开始加载时，脚本会自动捕获视频直链，并在页面右上角浮现悬浮控制栏，直接点击对应的播放器按钮即可唤起播放。
 3. **如果使用了高度魔改的域名导致未自动显示面板**：点击浏览器右上角的 **油猴扩展图标** → 点击 **“✅ 为当前站点启用外置播放器”** 即可永久绑定该域名。
-
----
-
-## ❓ 常见问题 (FAQ)
-
-**Q1：点击 `PotPlayer` 按钮浏览器没有反应？**  
-A：请确认电脑已安装桌面版 PotPlayer（绿色免安装版需在 PotPlayer `设置 -> 关联` 中勾选协议关联，否则系统无法识别 `potplayer://` 协议）。若未关联协议，可直接使用 **“复制直链(VLC)”** 按钮后粘贴到任意播放器打开。
-
-**Q2：为什么打开网页后悬浮栏没有立刻出现？**  
-A：悬浮栏仅在侦测到视频流请求后才会动态渲染，避免在首页浏览海报墙时遮挡视线。点进具体影片播放页后即会自动出现。
 
 ---
 
