@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PeachMitao 外置播放器助手 (VLC / PotPlayer / IINA / MPV)
 // @namespace    https://github.com/kylo1989/peachmitao-external-player
-// @version      1.4.0
-// @description  精准嗅探 PeachMitao 原始视频流直链 (ticket=)，屏蔽 HLS 切片干扰，穿透顶层弹窗一键唤起本地 VLC、PotPlayer、IINA、MPV 播放。
+// @version      2.0.0
+// @description  深度适配 PeachMitao /api/external-playback 接口，无需启动网页播放器即可秒取 6 小时有效原盘直链，一键唤起本地 VLC、PotPlayer、IINA、MPV。
 // @author       kylo1989
 // @match        http://*/*
 // @match        https://*/*
@@ -33,7 +33,6 @@
         GM_setValue(key, JSON.stringify([...new Set(list)]));
     }
 
-    // 注册油猴菜单手动开关
     GM_registerMenuCommand('✅ 为当前站点启用外置播放器', () => {
         const enabled = getHostList(STORAGE_KEY_ENABLED_HOSTS);
         const disabled = getHostList(STORAGE_KEY_DISABLED_HOSTS).filter(h => h !== currentHost);
@@ -66,94 +65,221 @@
         if (title.includes('peach') || title.includes('peachmitao')) return true;
 
         const html = document.documentElement ? document.documentElement.innerHTML.slice(0, 4000).toLowerCase() : '';
-        if (html.includes('peachmitao') || html.includes('peach-player')) return true;
+        if (html.includes('peachmitao') || html.includes('external-playback')) return true;
 
         return false;
     }
 
-    let capturedStreamUrl = '';
-    let hasTicketStream = false;
+    let currentAssetId = '';
+    const ticketUrlCache = new Map(); // assetId -> ticketUrl
+    let latestTicketUrl = '';
     let isActivated = isPeachSite();
     let uiInjected = false;
 
-    // 过滤掉 HLS 临时切片 (.ts / .m4s)，只保留完整直链或主播放列表
-    function isValidStreamUrl(url) {
-        if (!url || typeof url !== 'string') return false;
-        if (url.startsWith('blob:') || url.startsWith('data:')) return false;
-
-        // 严格排除网页转码产生的单个切片文件，防止覆盖原始直链
-        if (/\/hls\/.*\.(ts|m4s)(\?|$)/i.test(url) || /\.(ts|m4s)(\?|$)/i.test(url)) {
-            return false;
+    // 递归从 JSON 对象中提取包含 ticket= 的原盘直链
+    function extractTicketUrlFromData(data, depth = 0) {
+        if (!data || depth > 5) return '';
+        if (typeof data === 'string') {
+            if (data.includes('ticket=') && !data.includes('.m3u8') && !data.includes('/hls/')) {
+                try {
+                    return new URL(data, location.origin).href;
+                } catch (e) {
+                    return data;
+                }
+            }
+            return '';
         }
-
-        // PeachMitao 原始直链最高特征
-        if (url.includes('ticket=')) return true;
-
-        // 兜底匹配完整视频文件或 m3u8 主索引
-        if (/\.(mp4|mkv|avi|flv|mov|webm|m3u8)(\?|$)/i.test(url)) return true;
-
-        return false;
+        if (Array.isArray(data)) {
+            for (const item of data) {
+                const found = extractTicketUrlFromData(item, depth + 1);
+                if (found) return found;
+            }
+        } else if (typeof data === 'object') {
+            // 优先匹配常见字段名
+            const priorityKeys = ['url', 'stream_url', 'streamUrl', 'playback_url', 'playbackUrl', 'direct_url', 'directUrl'];
+            for (const k of priorityKeys) {
+                if (typeof data[k] === 'string' && data[k].includes('ticket=')) {
+                    try {
+                        return new URL(data[k], location.origin).href;
+                    } catch (e) {
+                        return data[k];
+                    }
+                }
+            }
+            for (const val of Object.values(data)) {
+                const found = extractTicketUrlFromData(val, depth + 1);
+                if (found) return found;
+            }
+        }
+        return '';
     }
 
-    function handleCapturedUrl(rawUrl) {
-        if (!isValidStreamUrl(rawUrl)) return;
-
-        const isTicket = rawUrl.includes('ticket=');
-        if (isTicket) {
-            isActivated = true;
-        }
-        if (!isActivated) return;
-
-        // 如果已经捕获到带 ticket= 的原始直链，则不再被普通 m3u8 覆盖（除非来了新的 ticket= 链接）
-        if (hasTicketStream && !isTicket) {
-            return;
-        }
-
+    // 从 API 请求 URL 中嗅探当前作品资产 ID
+    function sniffAssetIdFromUrl(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== 'string') return;
         try {
-            const fullUrl = new URL(rawUrl, location.origin).href;
-            if (fullUrl === capturedStreamUrl) return;
-
-            capturedStreamUrl = fullUrl;
-            if (isTicket) {
-                hasTicketStream = true;
+            const u = new URL(rawUrl, location.origin);
+            // 1. 匹配 /api/external-playback?id=54
+            if (u.pathname.includes('/api/external-playback')) {
+                isActivated = true;
+                const id = u.searchParams.get('id');
+                if (id) setCurrentAssetId(id);
+                return;
             }
+            // 2. 匹配详情接口 /api/videos/54, /api/items/54, /api/media/54, /api/assets/54, /stream/54, /stream/hls/54
+            const m = u.pathname.match(/\/(?:api\/(?:videos|items|media|assets|works|ledger)|stream(?:\/hls)?)\/([a-zA-Z0-9_-]+)(?:\/|$)/);
+            if (m && m[1] && m[1] !== 'hls' && m[1] !== 'list' && m[1] !== 'search') {
+                setCurrentAssetId(m[1]);
+            }
+        } catch (e) {}
+    }
 
+    function setCurrentAssetId(id) {
+        if (!id) return;
+        currentAssetId = String(id);
+        if (isActivated) {
             ensureUI();
             syncMountTarget();
             updateUIState();
-        } catch (e) {}
+        }
     }
 
-    // 1. Hook window.fetch
-    const origFetch = window.fetch;
-    window.fetch = function (...args) {
-        try {
-            const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
-            handleCapturedUrl(reqUrl);
-        } catch (e) {}
-        return origFetch.apply(this, args);
-    };
-
-    // 2. Hook XMLHttpRequest
-    const origXhrOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (method, url) {
-        try {
-            handleCapturedUrl(url);
-        } catch (e) {}
-        return origXhrOpen.apply(this, arguments);
-    };
-
-    // 3. 监听 DOM 中动态插入的 <video> / <source>
-    function scanVideoElements() {
-        if (!isActivated && !isPeachSite()) return;
+    function recordTicketUrl(url, assetId = currentAssetId) {
+        if (!url || !url.includes('ticket=')) return;
         isActivated = true;
-        document.querySelectorAll('video, video source').forEach(el => {
-            const src = el.currentSrc || el.src || el.getAttribute('src');
-            handleCapturedUrl(src);
+        latestTicketUrl = url;
+        if (assetId) {
+            ticketUrlCache.set(String(assetId), url);
+        }
+        ensureUI();
+        syncMountTarget();
+        updateUIState();
+    }
+
+    // 主动调用 Peach 官方接口 POST /api/external-playback?id=<id> 获取 6 小时有效原盘直链
+    async function fetchOfficialTicketUrl() {
+        // 1. 优先命中当前资产缓存
+        if (currentAssetId && ticketUrlCache.has(currentAssetId)) {
+            return ticketUrlCache.get(currentAssetId);
+        }
+
+        // 2. 主动请求官方签发接口
+        if (currentAssetId) {
+            try {
+                const resp = await origFetch.call(window, `${location.origin}/api/external-playback?id=${encodeURIComponent(currentAssetId)}`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                });
+                if (resp.ok) {
+                    const text = await resp.text();
+                    let found = '';
+                    try {
+                        found = extractTicketUrlFromData(JSON.parse(text));
+                    } catch (e) {
+                        const match = text.match(/https?:\/\/[^\s"'<>]+ticket=[^\s"'<>]+|\/stream\/[^\s"'<>]+ticket=[^\s"'<>]+/);
+                        if (match) found = new URL(match[0], location.origin).href;
+                    }
+                    if (found) {
+                        recordTicketUrl(found, currentAssetId);
+                        return found;
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // 3. 兜底：若页面已有“网络播放地址 / VR”选项，自动模拟触发一次原生按钮获取直链
+        const nativeUrl = await triggerNativePlaybackButton();
+        if (nativeUrl) return nativeUrl;
+
+        return latestTicketUrl;
+    }
+
+    // 模拟触发 Peach 原生的“网络播放地址 / VR”获取链接
+    function triggerNativePlaybackButton() {
+        return new Promise((resolve) => {
+            const container = getTopMountContainer();
+            if (!container) return resolve('');
+
+            const selects = container.querySelectorAll('select');
+            let targetSelect = null;
+            for (const sel of selects) {
+                for (const opt of sel.options) {
+                    if (opt.text.includes('网络播放地址') || opt.text.includes('VR')) {
+                        targetSelect = sel;
+                        sel.value = opt.value;
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        break;
+                    }
+                }
+                if (targetSelect) break;
+            }
+
+            if (targetSelect && targetSelect.parentElement) {
+                const openBtn = Array.from(targetSelect.parentElement.querySelectorAll('button'))
+                    .find(b => b.textContent.trim() === '打开');
+                if (openBtn) {
+                    openBtn.click();
+                }
+            }
+
+            let attempts = 0;
+            const timer = setInterval(() => {
+                attempts++;
+                if (currentAssetId && ticketUrlCache.has(currentAssetId)) {
+                    clearInterval(timer);
+                    resolve(ticketUrlCache.get(currentAssetId));
+                } else if (latestTicketUrl) {
+                    clearInterval(timer);
+                    resolve(latestTicketUrl);
+                } else if (attempts >= 15) {
+                    clearInterval(timer);
+                    resolve('');
+                }
+            }, 150);
         });
     }
 
-    // 获取当前最顶层的有效可交互容器（穿透 <dialog open> 与全屏状态）
+    // Hook window.fetch（仅嗅探 ID 与 /api/external-playback 响应，绝不抓取 .ts 切片）
+    const origFetch = window.fetch;
+    window.fetch = async function (...args) {
+        const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
+        sniffAssetIdFromUrl(reqUrl);
+
+        const response = await origFetch.apply(this, args);
+        try {
+            if (reqUrl && reqUrl.includes('/api/external-playback')) {
+                const clone = response.clone();
+                clone.text().then(text => {
+                    try {
+                        const found = extractTicketUrlFromData(JSON.parse(text));
+                        if (found) recordTicketUrl(found);
+                    } catch (e) {}
+                }).catch(() => {});
+            }
+        } catch (e) {}
+        return response;
+    };
+
+    // Hook XMLHttpRequest
+    const origXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        sniffAssetIdFromUrl(url);
+        this.addEventListener('load', function () {
+            try {
+                if (typeof url === 'string' && url.includes('/api/external-playback')) {
+                    const found = extractTicketUrlFromData(JSON.parse(this.responseText));
+                    if (found) recordTicketUrl(found);
+                }
+            } catch (e) {}
+        });
+        return origXhrOpen.apply(this, arguments);
+    };
+
     function getTopMountContainer() {
         if (document.fullscreenElement) return document.fullscreenElement;
         const openDialogs = document.querySelectorAll('dialog[open]');
@@ -163,7 +289,6 @@
         return document.body || document.documentElement;
     }
 
-    // 确保悬浮栏始终处于 Top Layer 最顶端且不被模态框 inert 屏蔽
     function syncMountTarget() {
         const bar = document.getElementById('peach-ext-player-bar');
         if (!bar) return;
@@ -223,6 +348,69 @@
         }, 2800);
     }
 
+    async function launchPlayer(type) {
+        showToast('正在向 Peach 申请原盘直链...');
+        const streamUrl = await fetchOfficialTicketUrl();
+        if (!streamUrl) {
+            showToast('未能获取直链，请先点击页面上的“打开”按钮');
+            return;
+        }
+
+        GM_setClipboard(streamUrl);
+
+        if (type === 'vlc') {
+            location.href = 'vlc://' + streamUrl;
+            showToast('正在唤起 VLC（直链已同步复制，也可直接 Ctrl+V）');
+        } else if (type === 'pot') {
+            location.href = 'potplayer://' + streamUrl;
+            showToast('正在唤起 PotPlayer...');
+        } else if (type === 'iina') {
+            location.href = 'iina://weblink?url=' + encodeURIComponent(streamUrl);
+            showToast('正在唤起 IINA...');
+        } else if (type === 'mpv') {
+            location.href = 'mpv://' + streamUrl;
+            showToast('正在唤起 MPV...');
+        } else if (type === 'copy') {
+            showToast('6小时有效原盘直链已复制到剪贴板！');
+        }
+    }
+
+    // 在 Peach 原生的“打开”按钮旁边也嵌入一组快捷按钮
+    function injectInlineButtons() {
+        const container = getTopMountContainer();
+        if (!container) return;
+
+        const buttons = container.querySelectorAll('button');
+        for (const btn of buttons) {
+            if (btn.textContent.trim() === '打开' && btn.parentElement && !btn.parentElement.querySelector('.peach-inline-ext-group')) {
+                const selectEl = btn.parentElement.querySelector('select');
+                if (!selectEl) continue;
+
+                const group = document.createElement('span');
+                group.className = 'peach-inline-ext-group';
+                group.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-left:6px;';
+
+                const makeInlineBtn = (label, bg, type) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = label;
+                    b.style.cssText = `padding:6px 12px;border:none;border-radius:6px;background:${bg};color:#fff;font-size:13px;font-weight:500;cursor:pointer;line-height:1.4;`;
+                    b.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        launchPlayer(type);
+                    };
+                    return b;
+                };
+
+                group.appendChild(makeInlineBtn('VLC', '#ea580c', 'vlc'));
+                group.appendChild(makeInlineBtn('PotPlayer', '#d97706', 'pot'));
+                group.appendChild(makeInlineBtn('复制直链', '#059669', 'copy'));
+                btn.parentElement.appendChild(group);
+            }
+        }
+    }
+
     function ensureUI() {
         if (uiInjected) return;
         const target = getTopMountContainer();
@@ -267,12 +455,12 @@
         `;
 
         bar.innerHTML = `
-            <span id="peach-ext-status" style="color:#4ade80 !important;font-size:12px !important;margin-right:2px !important;" title="已捕获视频流直链">● 已就绪</span>
-            <button id="peach-btn-vlc" style="${btnBaseStyle}background:#ea580c !important;" title="自动唤起本地 VLC（同时已复制直链备用）">VLC</button>
+            <span id="peach-ext-status" style="color:#4ade80 !important;font-size:12px !important;margin-right:2px !important;" title="已对接 Peach 原盘直链接口">● 原盘直链</span>
+            <button id="peach-btn-vlc" style="${btnBaseStyle}background:#ea580c !important;" title="自动唤起本地 VLC">VLC</button>
             <button id="peach-btn-pot" style="${btnBaseStyle}background:#d97706 !important;" title="自动唤起 Windows 本地 PotPlayer">PotPlayer</button>
             <button id="peach-btn-iina" style="${btnBaseStyle}background:#2563eb !important;" title="自动唤起 macOS 本地 IINA">IINA</button>
             <button id="peach-btn-mpv" style="${btnBaseStyle}background:#7c3aed !important;" title="自动唤起本地 MPV">MPV</button>
-            <button id="peach-btn-copy" style="${btnBaseStyle}background:#059669 !important;" title="仅复制视频流直链">复制直链</button>
+            <button id="peach-btn-copy" style="${btnBaseStyle}background:#059669 !important;" title="复制 6 小时有效原盘直链">复制直链</button>
             <button id="peach-btn-toggle" style="background:transparent !important;border:none !important;color:#9ca3af !important;cursor:pointer !important;font-size:14px !important;padding:0 4px !important;pointer-events:auto !important;" title="收起/展开">×</button>
         `;
 
@@ -284,41 +472,11 @@
             btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
         });
 
-        document.getElementById('peach-btn-vlc').onclick = (e) => {
-            e.stopPropagation();
-            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
-            GM_setClipboard(capturedStreamUrl);
-            location.href = 'vlc://' + capturedStreamUrl;
-            showToast('正在唤起 VLC（直链已同步复制，未注册协议可直接 Ctrl+V）');
-        };
-
-        document.getElementById('peach-btn-pot').onclick = (e) => {
-            e.stopPropagation();
-            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
-            location.href = 'potplayer://' + capturedStreamUrl;
-            showToast('正在唤起 PotPlayer...');
-        };
-
-        document.getElementById('peach-btn-iina').onclick = (e) => {
-            e.stopPropagation();
-            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
-            location.href = 'iina://weblink?url=' + encodeURIComponent(capturedStreamUrl);
-            showToast('正在唤起 IINA...');
-        };
-
-        document.getElementById('peach-btn-mpv').onclick = (e) => {
-            e.stopPropagation();
-            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
-            location.href = 'mpv://' + capturedStreamUrl;
-            showToast('正在唤起 MPV...');
-        };
-
-        document.getElementById('peach-btn-copy').onclick = (e) => {
-            e.stopPropagation();
-            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
-            GM_setClipboard(capturedStreamUrl);
-            showToast('视频原始直链已复制到剪贴板');
-        };
+        document.getElementById('peach-btn-vlc').onclick = (e) => { e.stopPropagation(); launchPlayer('vlc'); };
+        document.getElementById('peach-btn-pot').onclick = (e) => { e.stopPropagation(); launchPlayer('pot'); };
+        document.getElementById('peach-btn-iina').onclick = (e) => { e.stopPropagation(); launchPlayer('iina'); };
+        document.getElementById('peach-btn-mpv').onclick = (e) => { e.stopPropagation(); launchPlayer('mpv'); };
+        document.getElementById('peach-btn-copy').onclick = (e) => { e.stopPropagation(); launchPlayer('copy'); };
 
         let collapsed = false;
         const toggleBtn = document.getElementById('peach-btn-toggle');
@@ -337,22 +495,23 @@
 
     function updateUIState() {
         const statusEl = document.getElementById('peach-ext-status');
-        if (statusEl && capturedStreamUrl) {
+        if (statusEl) {
             statusEl.style.setProperty('color', '#4ade80', 'important');
-            statusEl.textContent = hasTicketStream ? '● 原盘直链' : '● 已捕获';
+            statusEl.textContent = currentAssetId ? `● 资产 #${currentAssetId}` : '● 原盘直链';
         }
     }
 
     window.addEventListener('DOMContentLoaded', () => {
         if (isPeachSite()) {
             isActivated = true;
+            ensureUI();
         }
-        scanVideoElements();
 
         let syncTimer = null;
         const observer = new MutationObserver(() => {
-            scanVideoElements();
-            if (uiInjected) {
+            if (isActivated) {
+                ensureUI();
+                injectInlineButtons();
                 clearTimeout(syncTimer);
                 syncTimer = setTimeout(syncMountTarget, 80);
             }
@@ -361,7 +520,7 @@
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['src', 'open']
+            attributeFilter: ['open']
         });
 
         document.addEventListener('fullscreenchange', syncMountTarget);
