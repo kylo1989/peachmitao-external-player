@@ -7,6 +7,18 @@
 
 ---
 
+## 📦 一键安装
+
+安装前请确保浏览器已安装 **[Tampermonkey（篡改猴）](https://www.tampermonkey.net/)** 或 **[ScriptCat（脚本猫）](https://docs.scriptcat.org/)** 扩展，然后点击下方任意按钮即可自动唤起安装界面：
+
+[![点击一键安装 (GitHub)](https://img.shields.io/badge/🚀_点击一键安装-GitHub_直连-2ea44f?style=for-the-badge)](https://raw.githubusercontent.com/kylo1989/peachmitao-external-player/main/peachmitao-external-player.user.js)
+&nbsp;
+[![点击一键安装 (国内加速)](https://img.shields.io/badge/⚡_点击一键安装-国内_CDN_加速-007ec6?style=for-the-badge)](https://cdn.jsdelivr.net/gh/kylo1989/peachmitao-external-player@main/peachmitao-external-player.user.js)
+
+> **提示**：如遇默认分支名称为 `master` 而非 `main`，在创建仓库时选择 `main` 分支，或将上方链接中的 `main` 替换为 `master` 即可。
+
+---
+
 ## ✨ 为什么需要这个脚本？
 
 自建 NAS 影视库中的 4K 片源通常封装了 **MKV 容器**或 **AC3 / EAC3 / DTS 多声道音轨**。在部分浏览器（尤其是核显设备或精简版系统）中播放时，由于浏览器原生 `<video>` 标签不支持此类封装/音轨，网页端播放器会自动回退到 **WASM + WebGL 纯软解渲染**，导致：
@@ -26,13 +38,6 @@
   - **Windows**：一键唤起 **PotPlayer** / **MPV**，或一键复制直链至 **VLC**。
   - **macOS**：一键唤起 **IINA**。
 - **无感轻量化悬浮栏**：毛玻璃紧凑设计，支持右上角一键收起，复制直链采用非阻塞式气泡提示。
-
----
-
-## 📦 安装方法
-
-1. 确保浏览器已安装 **[Tampermonkey（篡改猴）](https://www.tampermonkey.net/)** 或 **ScriptCat（脚本猫）** 扩展。
-2. 点击本仓库中的 [`peachmitao-external-player.user.js`](./peachmitao-external-player.user.js) 文件，点击右上角的 **`Raw`** 按钮，油猴扩展会自动弹出安装确认界面，点击 **“安装”** 即可。
 
 ---
 
