@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Tampermonkey](https://img.shields.io/badge/Userscript-Tampermonkey-green.svg)](https://www.tampermonkey.net/)
 
-一款专为自建 **PeachMitao** 影视项目打造的油猴（Tampermonkey）增强脚本。它能够自动嗅探网页播放器的真实视频流直链，一键自动唤起本地独立播放器（**VLC**、**PotPlayer**、**IINA**、**MPV**）播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
+一款深度适配自建 **[PeachMitao](https://github.com/peach-mitao/peach)** 影视项目的油猴（Tampermonkey）增强脚本。直接对接 Peach 官方直链签发接口（`POST /api/external-playback`），**无需启动网页播放器（零卡顿）**即可秒取 6 小时有效的原盘直链，一键自动拉起本地 **VLC**、**PotPlayer**、**IINA** 或 **MPV** 硬解播放 4K 视频。
 
 ---
 
@@ -17,44 +17,22 @@
 
 ---
 
-## 🖥️ Windows 一键唤起 VLC 配置（必看）
+## 🖥️ Windows 一键拉起 VLC 配置（必看）
 
 Windows 下 PotPlayer 安装时会自动注册 `potplayer://` 协议，但 **VLC 官方安装包默认不会注册 `vlc://` 协议**。
 
-如需实现点击网页 `VLC` 按钮**自动弹出 VLC 播放器**，只需下载本仓库中的 [`register-vlc-protocol.bat`](./register-vlc-protocol.bat)，**右键选择“以管理员身份运行”** 即可自动完成协议注册（脚本会自动定位 `C:\Program Files\VideoLAN\VLC\vlc.exe`，绿色版手动输入路径即可）。
+如需实现点击网页 `VLC` 按钮**自动弹出 VLC 播放器**，只需下载本仓库中的 [`register-vlc-protocol.bat`](./register-vlc-protocol.bat) 并**双击运行**（会自动申请管理员权限并生成纯批处理协议启动器 `C:\ProgramData\VLC-Protocol\launch-vlc.bat`，无任何脚本拦截兼容问题）。
 
-> **免配置兜底**：即使不注册 `vlc://` 协议，每次点击网页上的 `VLC` 按钮时，脚本也会同步将直链复制到剪贴板，切到 VLC 窗口按下 `Ctrl + V` 回车同样可以秒播。
-
----
-
-## ✨ 为什么需要这个脚本？
-
-自建 NAS 影视库中的 4K 片源通常封装了 **MKV 容器**或 **AC3 / EAC3 / DTS 多声道音轨**。在部分浏览器（尤其是核显设备或精简版系统）中播放时，由于浏览器原生 `<video>` 标签不支持此类封装/音轨，网页端播放器会自动回退到 **WASM + WebGL 纯软解渲染**，导致：
-- 显卡 `3D` 管线占用飙升至 `100%`，专用 `Video Decode` 硬件解码单元却处于 `0%` 闲置状态；
-- 网页画面持续转圈、掉帧严重甚至浏览器标签页卡死。
-
-通过本脚本直接将带鉴权票据（`ticket=`）的视频直链交给本地原生播放器，可完美调用显卡硬件解码，实现 **4K 秒开、低占用满帧播放、完整保留原盘多音轨与外挂字幕**。
+> **免配置兜底**：即使不注册 `vlc://` 协议，每次点击网页上的 `VLC` 按钮时，脚本也会同步将原盘直链复制到剪贴板，切到 VLC 窗口按下 `Ctrl + V` 回车同样可以秒播。
 
 ---
 
-## 🚀 核心特性
+## ✨ 核心特性
 
-- **零配置通用适配**：无需手动修改代码中的 IP 或端口，自动兼容任意内网 IP、自定义端口及反向代理域名。
-- **智能站点识别 + 菜单手动开关**：自动识别 PeachMitao 页面与 `ticket=` 流媒体特征，不干扰其他正常网页；支持通过油猴扩展菜单一键为任意自定义域名强制开启或禁用。
-- **全链路视频流嗅探**：同时拦截 `fetch`、`XMLHttpRequest` 以及动态生成的 `<video>` 标签，秒级捕获真实播放流。
-- **全平台主流播放器支持**：
-  - **VLC**：一键自动唤起（需运行一次 `register-vlc-protocol.bat`）+ 自动复制直链双保险。
-  - **PotPlayer**：一键自动唤起（Windows 原生支持）。
-  - **IINA**：一键自动唤起（macOS 原生支持）。
-  - **MPV**：一键自动唤起（需注册 `mpv://` 协议）。
-
----
-
-## 🎮 使用说明
-
-1. 打开你部署的 PeachMitao 网页并进入任意影片的播放页面。
-2. 当视频开始加载时，脚本会自动捕获视频直链，并在页面右上角浮现悬浮控制栏，直接点击对应的播放器按钮即可唤起播放。
-3. **如果使用了高度魔改的域名导致未自动显示面板**：点击浏览器右上角的 **油猴扩展图标** → 点击 **“✅ 为当前站点启用外置播放器”** 即可永久绑定该域名。
+- **对接官方直链接口（彻底杜绝网页卡死）**：直接调用 Peach 的 `POST /api/external-playback?id=...` 签发接口获取 6 小时有效原盘直链，无需先加载网页播放器，彻底屏蔽 HLS `.ts` 切片干扰，避免核显设备网页端软解死锁。
+- **原生弹窗深度融合**：既在页面顶层（Top Layer）提供可折叠悬浮栏，又直接在 Peach 详情弹窗的 **“打开”** 按钮旁嵌入 `VLC`、`PotPlayer`、`复制直链` 快捷按钮。
+- **零配置通用适配**：自动兼容任意内网 IP、自定义端口及反向代理域名；支持通过油猴扩展菜单一键为任意自定义域名强制开启或禁用。
+- **全平台播放器支持**：支持 Windows（**VLC** / **PotPlayer** / **MPV**）与 macOS（**IINA** / **MPV**）。
 
 ---
 
