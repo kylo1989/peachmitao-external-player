@@ -1,6 +1,14 @@
 @echo off
 title Register VLC URL Protocol (vlc://)
 
+:: 自动请求管理员权限（确保能彻底清理之前写入 HKLM 的旧错误项）
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Requesting Administrator privileges...
+    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
+
 :: 1. 自动查找 VLC 安装路径
 set "VLC_PATH="
 if exist "C:\Program Files\VideoLAN\VLC\vlc.exe" set "VLC_PATH=C:\Program Files\VideoLAN\VLC\vlc.exe"
@@ -18,8 +26,8 @@ if not exist "%VLC_PATH%" (
     exit /b 1
 )
 
-:: 2. 生成静默中转调度脚本 (避免 cmd /c 截断 URL 中的 & 符号及黑框闪烁)
-set "HANDLER_DIR=%LOCALAPPDATA%\VLC-Protocol"
+:: 2. 在公共目录生成静默中转调度脚本 (避免权限隔离及截断 & 参数)
+set "HANDLER_DIR=%ProgramData%\VLC-Protocol"
 if not exist "%HANDLER_DIR%" mkdir "%HANDLER_DIR%"
 set "VBS_FILE=%HANDLER_DIR%\vlc-handler.vbs"
 
@@ -35,25 +43,25 @@ set "VBS_FILE=%HANDLER_DIR%\vlc-handler.vbs"
     echo End If
 ) > "%VBS_FILE%"
 
-:: 3. 清理旧的错误注册表项并生成标准 .reg 文件导入
-reg delete "HKCR\vlc" /f >nul 2>&1
+:: 3. 彻底删除 HKLM 和 HKCU 中的所有旧残留，并写入系统级标准协议
+reg delete "HKLM\Software\Classes\vlc" /f >nul 2>&1
 reg delete "HKCU\Software\Classes\vlc" /f >nul 2>&1
 
 set "VLC_REG=%VLC_PATH:\=\\%"
 set "VBS_REG=%VBS_FILE:\=\\%"
-set "REG_TMP=%TEMP%\vlc_protocol_fix.reg"
+set "REG_TMP=%TEMP%\vlc_protocol_clean.reg"
 
 (
     echo Windows Registry Editor Version 5.00
     echo.
-    echo [HKEY_CURRENT_USER\Software\Classes\vlc]
+    echo [HKEY_LOCAL_MACHINE\SOFTWARE\Classes\vlc]
     echo @="URL:VLC Protocol"
     echo "URL Protocol"=""
     echo.
-    echo [HKEY_CURRENT_USER\Software\Classes\vlc\DefaultIcon]
+    echo [HKEY_LOCAL_MACHINE\SOFTWARE\Classes\vlc\DefaultIcon]
     echo @="\"%VLC_REG%\",0"
     echo.
-    echo [HKEY_CURRENT_USER\Software\Classes\vlc\shell\open\command]
+    echo [HKEY_LOCAL_MACHINE\SOFTWARE\Classes\vlc\shell\open\command]
     echo @="wscript.exe \"%VBS_REG%\" \"%%1\""
 ) > "%REG_TMP%"
 
@@ -61,7 +69,8 @@ reg import "%REG_TMP%" >nul 2>&1
 del /f /q "%REG_TMP%" >nul 2>&1
 
 echo.
-echo [Success] vlc:// protocol has been registered!
+echo [Success] vlc:// protocol has been cleanly registered!
 echo VLC Path: "%VLC_PATH%"
-echo You can now click the VLC button in your browser to launch VLC directly.
+echo Handler : "%VBS_FILE%"
+echo.
 pause
