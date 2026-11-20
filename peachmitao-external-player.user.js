@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PeachMitao 外置播放器助手 (VLC / PotPlayer / IINA / MPV)
 // @namespace    https://github.com/kylo1989/peachmitao-external-player
-// @version      1.2.0
-// @description  自动嗅探 PeachMitao 网页端视频流直链，一键唤起本地 VLC、PotPlayer、IINA、MPV 播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
+// @version      1.3.0
+// @description  自动嗅探 PeachMitao 网页端视频流直链，穿透顶层弹窗一键唤起本地 VLC、PotPlayer、IINA、MPV 播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
 // @author       kylo1989
 // @match        http://*/*
 // @match        https://*/*
@@ -96,6 +96,7 @@
             if (fullUrl === capturedStreamUrl) return;
             capturedStreamUrl = fullUrl;
             ensureUI();
+            syncMountTarget();
             updateUIState();
         } catch (e) {}
     }
@@ -129,6 +130,37 @@
         });
     }
 
+    // 获取当前最顶层的有效可交互容器（穿透 <dialog open> 与全屏状态）
+    function getTopMountContainer() {
+        if (document.fullscreenElement) return document.fullscreenElement;
+        const openDialogs = document.querySelectorAll('dialog[open]');
+        if (openDialogs.length > 0) {
+            return openDialogs[openDialogs.length - 1];
+        }
+        return document.body || document.documentElement;
+    }
+
+    // 确保悬浮栏始终处于 Top Layer 最顶端且不被模态框 inert 屏蔽
+    function syncMountTarget() {
+        const bar = document.getElementById('peach-ext-player-bar');
+        if (!bar) return;
+
+        const target = getTopMountContainer();
+        if (target && bar.parentElement !== target) {
+            target.appendChild(bar);
+        }
+
+        // 利用 Popover API 置顶于浏览器的 Top Layer 渲染栈
+        if (typeof bar.showPopover === 'function') {
+            try {
+                if (bar.matches(':popover-open')) {
+                    bar.hidePopover();
+                }
+                bar.showPopover();
+            } catch (e) {}
+        }
+    }
+
     function showToast(msg) {
         const old = document.getElementById('peach-ext-toast');
         if (old) old.remove();
@@ -136,23 +168,33 @@
         const toast = document.createElement('div');
         toast.id = 'peach-ext-toast';
         toast.textContent = msg;
+        toast.setAttribute('popover', 'manual');
         toast.style.cssText = `
-            position: fixed;
-            top: 64px;
-            right: 20px;
-            z-index: 2147483647;
-            background: rgba(24, 24, 28, 0.92);
-            color: #fff;
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-size: 13px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-            backdrop-filter: blur(6px);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            transition: opacity 0.25s ease;
-            pointer-events: none;
+            position: fixed !important;
+            inset: auto !important;
+            top: 64px !important;
+            right: 20px !important;
+            margin: 0 !important;
+            z-index: 2147483647 !important;
+            background: rgba(24, 24, 28, 0.94) !important;
+            color: #fff !important;
+            padding: 8px 14px !important;
+            border-radius: 6px !important;
+            font-size: 13px !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+            backdrop-filter: blur(6px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            transition: opacity 0.25s ease !important;
+            pointer-events: none !important;
         `;
-        document.body.appendChild(toast);
+
+        const target = getTopMountContainer();
+        if (target) target.appendChild(toast);
+
+        if (typeof toast.showPopover === 'function') {
+            try { toast.showPopover(); } catch (e) {}
+        }
+
         setTimeout(() => {
             toast.style.opacity = '0';
             setTimeout(() => toast.remove(), 300);
@@ -160,60 +202,69 @@
     }
 
     function ensureUI() {
-        if (uiInjected || !document.body) return;
+        if (uiInjected) return;
+        const target = getTopMountContainer();
+        if (!target) return;
         uiInjected = true;
 
         const bar = document.createElement('div');
         bar.id = 'peach-ext-player-bar';
+        bar.setAttribute('popover', 'manual');
         bar.style.cssText = `
-            position: fixed;
-            top: 16px;
-            right: 20px;
-            z-index: 2147483646;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            background: rgba(20, 22, 28, 0.85);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 8px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            transition: all 0.2s ease;
+            position: fixed !important;
+            inset: auto !important;
+            top: 16px !important;
+            right: 20px !important;
+            margin: 0 !important;
+            z-index: 2147483647 !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            padding: 6px 10px !important;
+            background: rgba(20, 22, 28, 0.9) !important;
+            backdrop-filter: blur(8px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            pointer-events: auto !important;
+            user-select: none !important;
         `;
 
         const btnBaseStyle = `
-            padding: 5px 10px;
-            border: none;
-            border-radius: 5px;
-            color: #fff;
-            font-size: 12px;
-            font-weight: 500;
-            cursor: pointer;
-            line-height: 1.4;
-            transition: filter 0.15s ease;
+            padding: 5px 10px !important;
+            border: none !important;
+            border-radius: 5px !important;
+            color: #fff !important;
+            font-size: 12px !important;
+            font-weight: 500 !important;
+            cursor: pointer !important;
+            line-height: 1.4 !important;
+            transition: filter 0.15s ease !important;
+            pointer-events: auto !important;
         `;
 
         bar.innerHTML = `
-            <span id="peach-ext-status" style="color:#4ade80;font-size:12px;margin-right:2px;user-select:none;" title="已捕获视频流直链">● 已就绪</span>
-            <button id="peach-btn-vlc" style="${btnBaseStyle}background:#ea580c;" title="自动唤起本地 VLC（同时已复制直链备用）">VLC</button>
-            <button id="peach-btn-pot" style="${btnBaseStyle}background:#d97706;" title="自动唤起 Windows 本地 PotPlayer">PotPlayer</button>
-            <button id="peach-btn-iina" style="${btnBaseStyle}background:#2563eb;" title="自动唤起 macOS 本地 IINA">IINA</button>
-            <button id="peach-btn-mpv" style="${btnBaseStyle}background:#7c3aed;" title="自动唤起本地 MPV">MPV</button>
-            <button id="peach-btn-copy" style="${btnBaseStyle}background:#059669;" title="仅复制视频流直链">复制直链</button>
-            <button id="peach-btn-toggle" style="background:transparent;border:none;color:#9ca3af;cursor:pointer;font-size:14px;padding:0 4px;" title="收起/展开">×</button>
+            <span id="peach-ext-status" style="color:#4ade80 !important;font-size:12px !important;margin-right:2px !important;" title="已捕获视频流直链">● 已就绪</span>
+            <button id="peach-btn-vlc" style="${btnBaseStyle}background:#ea580c !important;" title="自动唤起本地 VLC（同时已复制直链备用）">VLC</button>
+            <button id="peach-btn-pot" style="${btnBaseStyle}background:#d97706 !important;" title="自动唤起 Windows 本地 PotPlayer">PotPlayer</button>
+            <button id="peach-btn-iina" style="${btnBaseStyle}background:#2563eb !important;" title="自动唤起 macOS 本地 IINA">IINA</button>
+            <button id="peach-btn-mpv" style="${btnBaseStyle}background:#7c3aed !important;" title="自动唤起本地 MPV">MPV</button>
+            <button id="peach-btn-copy" style="${btnBaseStyle}background:#059669 !important;" title="仅复制视频流直链">复制直链</button>
+            <button id="peach-btn-toggle" style="background:transparent !important;border:none !important;color:#9ca3af !important;cursor:pointer !important;font-size:14px !important;padding:0 4px !important;pointer-events:auto !important;" title="收起/展开">×</button>
         `;
 
-        document.body.appendChild(bar);
+        target.appendChild(bar);
+        syncMountTarget();
 
         bar.querySelectorAll('button').forEach(btn => {
-            btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.12)'; });
+            btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
             btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
         });
 
         // 自动唤起 VLC（同时复制直链到剪贴板兜底）
-        document.getElementById('peach-btn-vlc').onclick = () => {
+        document.getElementById('peach-btn-vlc').onclick = (e) => {
+            e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             GM_setClipboard(capturedStreamUrl);
             location.href = 'vlc://' + capturedStreamUrl;
@@ -221,28 +272,32 @@
         };
 
         // 自动唤起 PotPlayer
-        document.getElementById('peach-btn-pot').onclick = () => {
+        document.getElementById('peach-btn-pot').onclick = (e) => {
+            e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             location.href = 'potplayer://' + capturedStreamUrl;
             showToast('正在唤起 PotPlayer...');
         };
 
         // 自动唤起 IINA (macOS)
-        document.getElementById('peach-btn-iina').onclick = () => {
+        document.getElementById('peach-btn-iina').onclick = (e) => {
+            e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             location.href = 'iina://weblink?url=' + encodeURIComponent(capturedStreamUrl);
             showToast('正在唤起 IINA...');
         };
 
         // 自动唤起 MPV
-        document.getElementById('peach-btn-mpv').onclick = () => {
+        document.getElementById('peach-btn-mpv').onclick = (e) => {
+            e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             location.href = 'mpv://' + capturedStreamUrl;
             showToast('正在唤起 MPV...');
         };
 
         // 仅复制直链
-        document.getElementById('peach-btn-copy').onclick = () => {
+        document.getElementById('peach-btn-copy').onclick = (e) => {
+            e.stopPropagation();
             if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
             GM_setClipboard(capturedStreamUrl);
             showToast('视频直链已复制到剪贴板');
@@ -251,12 +306,13 @@
         // 折叠/展开控制
         let collapsed = false;
         const toggleBtn = document.getElementById('peach-btn-toggle');
-        toggleBtn.onclick = () => {
+        toggleBtn.onclick = (e) => {
+            e.stopPropagation();
             collapsed = !collapsed;
             const items = ['peach-ext-status', 'peach-btn-vlc', 'peach-btn-pot', 'peach-btn-iina', 'peach-btn-mpv', 'peach-btn-copy'];
             items.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.style.display = collapsed ? 'none' : 'inline-block';
+                if (el) el.style.setProperty('display', collapsed ? 'none' : 'inline-block', 'important');
             });
             toggleBtn.textContent = collapsed ? '🎬' : '×';
             toggleBtn.title = collapsed ? '展开外置播放器面板' : '收起面板';
@@ -266,7 +322,7 @@
     function updateUIState() {
         const statusEl = document.getElementById('peach-ext-status');
         if (statusEl && capturedStreamUrl) {
-            statusEl.style.color = '#4ade80';
+            statusEl.style.setProperty('color', '#4ade80', 'important');
             statusEl.textContent = '● 已捕获';
         }
     }
@@ -276,9 +332,22 @@
             isActivated = true;
         }
         scanVideoElements();
+
+        let syncTimer = null;
         const observer = new MutationObserver(() => {
             scanVideoElements();
+            if (uiInjected) {
+                clearTimeout(syncTimer);
+                syncTimer = setTimeout(syncMountTarget, 80);
+            }
         });
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src', 'open']
+        });
+
+        document.addEventListener('fullscreenchange', syncMountTarget);
     });
 })();
