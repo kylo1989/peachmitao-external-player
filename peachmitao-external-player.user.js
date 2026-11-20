@@ -1,0 +1,292 @@
+// ==UserScript==
+// @name         PeachMitao 外置播放器助手 (PotPlayer / VLC / IINA / MPV)
+// @namespace    https://github.com/kylo1989/peachmitao-external-player
+// @version      1.1.0
+// @description  自动嗅探 PeachMitao 网页端视频流直链，一键唤起 PotPlayer、IINA、MPV 或复制直链至 VLC 播放，彻底解决浏览器 4K 硬解卡顿与音轨不兼容问题。
+// @author       kylo1989
+// @match        http://*/*
+// @match        https://*/*
+// @grant        GM_setClipboard
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @run-at       document-start
+// @license      MIT
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const STORAGE_KEY_ENABLED_HOSTS = 'peach_enabled_hosts_v1';
+    const STORAGE_KEY_DISABLED_HOSTS = 'peach_disabled_hosts_v1';
+    const currentHost = location.host;
+
+    // 读取用户手动配置列表
+    function getHostList(key) {
+        try {
+            return JSON.parse(GM_getValue(key, '[]'));
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveHostList(key, list) {
+        GM_setValue(key, JSON.stringify([...new Set(list)]));
+    }
+
+    // 注册油猴菜单手动开关（适配任意自定义域名/端口）
+    GM_registerMenuCommand('✅ 为当前站点启用外置播放器', () => {
+        const enabled = getHostList(STORAGE_KEY_ENABLED_HOSTS);
+        const disabled = getHostList(STORAGE_KEY_DISABLED_HOSTS).filter(h => h !== currentHost);
+        enabled.push(currentHost);
+        saveHostList(STORAGE_KEY_ENABLED_HOSTS, enabled);
+        saveHostList(STORAGE_KEY_DISABLED_HOSTS, disabled);
+        showToast(`已为 ${currentHost} 启用，刷新页面生效`);
+        setTimeout(() => location.reload(), 800);
+    });
+
+    GM_registerMenuCommand('🚫 在当前站点禁用外置播放器', () => {
+        const disabled = getHostList(STORAGE_KEY_DISABLED_HOSTS);
+        const enabled = getHostList(STORAGE_KEY_ENABLED_HOSTS).filter(h => h !== currentHost);
+        disabled.push(currentHost);
+        saveHostList(STORAGE_KEY_DISABLED_HOSTS, disabled);
+        saveHostList(STORAGE_KEY_ENABLED_HOSTS, enabled);
+        const panel = document.getElementById('peach-ext-player-bar');
+        if (panel) panel.remove();
+        showToast(`已在 ${currentHost} 禁用本脚本`);
+    });
+
+    // 判断当前页面是否为 PeachMitao 站点
+    function isPeachSite() {
+        const disabled = getHostList(STORAGE_KEY_DISABLED_HOSTS);
+        if (disabled.includes(currentHost)) return false;
+
+        const enabled = getHostList(STORAGE_KEY_ENABLED_HOSTS);
+        if (enabled.includes(currentHost)) return true;
+
+        // 自动特征识别：标题、Meta 或路径特征
+        const title = (document.title || '').toLowerCase();
+        if (title.includes('peach') || title.includes('peachmitao')) return true;
+
+        const html = document.documentElement ? document.documentElement.innerHTML.slice(0, 4000).toLowerCase() : '';
+        if (html.includes('peachmitao') || html.includes('peach-player')) return true;
+
+        return false;
+    }
+
+    let capturedStreamUrl = '';
+    let isActivated = isPeachSite();
+    let uiInjected = false;
+
+    // 校验是否为有效视频流 URL
+    function isValidStreamUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        if (url.startsWith('blob:') || url.startsWith('data:')) return false;
+
+        // PeachMitao 典型鉴权直链特征
+        if (url.includes('ticket=')) return true;
+
+        // 常见流媒体或媒体文件后缀
+        if (/\.(m3u8|mp4|mkv|avi|ts|flv|mov|webm)(\?|$)/i.test(url)) return true;
+
+        return false;
+    }
+
+    // 处理捕获到的视频流地址
+    function handleCapturedUrl(rawUrl) {
+        if (!isValidStreamUrl(rawUrl)) return;
+
+        // 若捕获到 ticket= 特征，自动将当前站点识别为 PeachMitao
+        if (rawUrl.includes('ticket=')) {
+            isActivated = true;
+        }
+        if (!isActivated) return;
+
+        try {
+            const fullUrl = new URL(rawUrl, location.origin).href;
+            if (fullUrl === capturedStreamUrl) return;
+            capturedStreamUrl = fullUrl;
+            ensureUI();
+            updateUIState();
+        } catch (e) {
+            // 忽略非法 URL
+        }
+    }
+
+    // 1. Hook window.fetch
+    const origFetch = window.fetch;
+    window.fetch = function (...args) {
+        try {
+            const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
+            handleCapturedUrl(reqUrl);
+        } catch (e) {}
+        return origFetch.apply(this, args);
+    };
+
+    // 2. Hook XMLHttpRequest
+    const origXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        try {
+            handleCapturedUrl(url);
+        } catch (e) {}
+        return origXhrOpen.apply(this, arguments);
+    };
+
+    // 3. 监听 DOM 中动态插入的 <video> / <source>
+    function scanVideoElements() {
+        if (!isActivated && !isPeachSite()) return;
+        isActivated = true;
+        document.querySelectorAll('video, video source').forEach(el => {
+            const src = el.currentSrc || el.src || el.getAttribute('src');
+            handleCapturedUrl(src);
+        });
+    }
+
+    // 轻量化气泡提示
+    function showToast(msg) {
+        const old = document.getElementById('peach-ext-toast');
+        if (old) old.remove();
+
+        const toast = document.createElement('div');
+        toast.id = 'peach-ext-toast';
+        toast.textContent = msg;
+        toast.style.cssText = `
+            position: fixed;
+            top: 64px;
+            right: 20px;
+            z-index: 2147483647;
+            background: rgba(24, 24, 28, 0.92);
+            color: #fff;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: opacity 0.25s ease;
+            pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 2400);
+    }
+
+    // 构建悬浮控制栏
+    function ensureUI() {
+        if (uiInjected || !document.body) return;
+        uiInjected = true;
+
+        const bar = document.createElement('div');
+        bar.id = 'peach-ext-player-bar';
+        bar.style.cssText = `
+            position: fixed;
+            top: 16px;
+            right: 20px;
+            z-index: 2147483646;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: rgba(20, 22, 28, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            transition: all 0.2s ease;
+        `;
+
+        const btnBaseStyle = `
+            padding: 5px 10px;
+            border: none;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            line-height: 1.4;
+            transition: filter 0.15s ease, transform 0.1s ease;
+        `;
+
+        bar.innerHTML = `
+            <span id="peach-ext-status" style="color:#4ade80;font-size:12px;margin-right:2px;user-select:none;" title="已捕获视频流直链">● 已就绪</span>
+            <button id="peach-btn-pot" style="${btnBaseStyle}background:#f59e0b;" title="唤起 Windows 本地 PotPlayer">PotPlayer</button>
+            <button id="peach-btn-iina" style="${btnBaseStyle}background:#3b82f6;" title="唤起 macOS 本地 IINA">IINA</button>
+            <button id="peach-btn-mpv" style="${btnBaseStyle}background:#8b5cf6;" title="唤起本地 MPV (需注册 mpv:// 协议)">MPV</button>
+            <button id="peach-btn-vlc" style="${btnBaseStyle}background:#10b981;" title="复制视频直链，在 VLC 中按 Ctrl+V 播放">复制直链(VLC)</button>
+            <button id="peach-btn-toggle" style="background:transparent;border:none;color:#9ca3af;cursor:pointer;font-size:14px;padding:0 4px;" title="收起/展开">×</button>
+        `;
+
+        document.body.appendChild(bar);
+
+        // 按钮交互反馈
+        bar.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.12)'; });
+            btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
+        });
+
+        // 唤起 PotPlayer
+        document.getElementById('peach-btn-pot').onclick = () => {
+            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
+            location.href = 'potplayer://' + capturedStreamUrl;
+            showToast('正在唤起 PotPlayer...');
+        };
+
+        // 唤起 IINA (macOS)
+        document.getElementById('peach-btn-iina').onclick = () => {
+            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
+            location.href = 'iina://weblink?url=' + encodeURIComponent(capturedStreamUrl);
+            showToast('正在唤起 IINA...');
+        };
+
+        // 唤起 MPV
+        document.getElementById('peach-btn-mpv').onclick = () => {
+            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
+            location.href = 'mpv://' + capturedStreamUrl;
+            showToast('正在唤起 MPV...');
+        };
+
+        // 复制直链给 VLC / 其他播放器
+        document.getElementById('peach-btn-vlc').onclick = () => {
+            if (!capturedStreamUrl) return showToast('尚未捕获到视频流，请先点击播放视频');
+            GM_setClipboard(capturedStreamUrl);
+            showToast('直链已复制！切到 VLC 按 Ctrl+V 即可秒播');
+        };
+
+        // 折叠/展开控制
+        let collapsed = false;
+        const toggleBtn = document.getElementById('peach-btn-toggle');
+        toggleBtn.onclick = () => {
+            collapsed = !collapsed;
+            const items = ['peach-ext-status', 'peach-btn-pot', 'peach-btn-iina', 'peach-btn-mpv', 'peach-btn-vlc'];
+            items.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = collapsed ? 'none' : 'inline-block';
+            });
+            toggleBtn.textContent = collapsed ? '🎬' : '×';
+            toggleBtn.title = collapsed ? '展开外置播放器面板' : '收起面板';
+        };
+    }
+
+    function updateUIState() {
+        const statusEl = document.getElementById('peach-ext-status');
+        if (statusEl && capturedStreamUrl) {
+            statusEl.style.color = '#4ade80';
+            statusEl.textContent = '● 已捕获';
+        }
+    }
+
+    // 页面加载后启动 DOM 观察器
+    window.addEventListener('DOMContentLoaded', () => {
+        if (isPeachSite()) {
+            isActivated = true;
+        }
+        scanVideoElements();
+        const observer = new MutationObserver(() => {
+            scanVideoElements();
+        });
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+    });
+})();
