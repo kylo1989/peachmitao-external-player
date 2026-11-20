@@ -1,7 +1,7 @@
 @echo off
 title Register VLC URL Protocol (vlc://)
 
-:: 自动请求管理员权限（确保能彻底清理之前写入 HKLM 的旧错误项）
+:: 自动请求管理员权限以清理旧残留并写入系统级协议
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting Administrator privileges...
@@ -9,7 +9,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: 1. 自动查找 VLC 安装路径
+:: 1. 自动检测 VLC 安装路径
 set "VLC_PATH="
 if exist "C:\Program Files\VideoLAN\VLC\vlc.exe" set "VLC_PATH=C:\Program Files\VideoLAN\VLC\vlc.exe"
 if exist "C:\Program Files (x86)\VideoLAN\VLC\vlc.exe" set "VLC_PATH=C:\Program Files (x86)\VideoLAN\VLC\vlc.exe"
@@ -26,30 +26,25 @@ if not exist "%VLC_PATH%" (
     exit /b 1
 )
 
-:: 2. 在公共目录生成静默中转调度脚本 (避免权限隔离及截断 & 参数)
+:: 2. 在公共目录生成纯批处理协议剥离与启动器 (不被安全软件拦截，且完整保留 & 参数)
 set "HANDLER_DIR=%ProgramData%\VLC-Protocol"
 if not exist "%HANDLER_DIR%" mkdir "%HANDLER_DIR%"
-set "VBS_FILE=%HANDLER_DIR%\vlc-handler.vbs"
+set "LAUNCHER_BAT=%HANDLER_DIR%\launch-vlc.bat"
 
 (
-    echo Set args = WScript.Arguments
-    echo If args.Count ^> 0 Then
-    echo     url = args^(0^)
-    echo     If LCase^(Left^(url, 6^)^) = "vlc://" Then
-    echo         url = Mid^(url, 7^)
-    echo     End If
-    echo     Set shell = CreateObject^("WScript.Shell"^)
-    echo     shell.Run Chr^(34^) ^& "%VLC_PATH%" ^& Chr^(34^) ^& " " ^& Chr^(34^) ^& url ^& Chr^(34^), 1, False
-    echo End If
-) > "%VBS_FILE%"
+    echo @echo off
+    echo set "url=%%~1"
+    echo set "url=%%url:vlc://=%%"
+    echo start "" "%VLC_PATH%" "%%url%%"
+) > "%LAUNCHER_BAT%"
 
-:: 3. 彻底删除 HKLM 和 HKCU 中的所有旧残留，并写入系统级标准协议
+:: 3. 清理所有旧注册表项并导入标准 .reg 文件
 reg delete "HKLM\Software\Classes\vlc" /f >nul 2>&1
 reg delete "HKCU\Software\Classes\vlc" /f >nul 2>&1
 
 set "VLC_REG=%VLC_PATH:\=\\%"
-set "VBS_REG=%VBS_FILE:\=\\%"
-set "REG_TMP=%TEMP%\vlc_protocol_clean.reg"
+set "BAT_REG=%LAUNCHER_BAT:\=\\%"
+set "REG_TMP=%TEMP%\vlc_protocol_v2.reg"
 
 (
     echo Windows Registry Editor Version 5.00
@@ -62,15 +57,15 @@ set "REG_TMP=%TEMP%\vlc_protocol_clean.reg"
     echo @="\"%VLC_REG%\",0"
     echo.
     echo [HKEY_LOCAL_MACHINE\SOFTWARE\Classes\vlc\shell\open\command]
-    echo @="wscript.exe \"%VBS_REG%\" \"%%1\""
+    echo @="\"%BAT_REG%\" \"%%1\""
 ) > "%REG_TMP%"
 
 reg import "%REG_TMP%" >nul 2>&1
 del /f /q "%REG_TMP%" >nul 2>&1
 
 echo.
-echo [Success] vlc:// protocol has been cleanly registered!
-echo VLC Path: "%VLC_PATH%"
-echo Handler : "%VBS_FILE%"
+echo [Success] vlc:// protocol registered successfully!
+echo VLC Path : "%VLC_PATH%"
+echo Launcher : "%LAUNCHER_BAT%"
 echo.
 pause
